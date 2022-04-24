@@ -275,6 +275,8 @@ extern int64 VacuumPageDirty;
 extern int	VacuumCostBalance;
 extern bool VacuumCostActive;
 
+extern bool EnableDeadLockDection;
+extern bool EnableSerializable;
 
 /* in tcop/postgres.c */
 

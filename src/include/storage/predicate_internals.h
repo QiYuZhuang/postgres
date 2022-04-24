@@ -91,6 +91,10 @@ typedef struct SERIALIZABLEXACT
 	SHM_QUEUE	predicateLocks; /* list of associated PREDICATELOCK objects */
 	SHM_QUEUE	finishedLink;	/* list link in
 								 * FinishedSerializableTransactions */
+	
+	SHM_QUEUE 	outWriteConflicts;
+	SHM_QUEUE	inWriteConflicts;
+	SHM_QUEUE	predicateWriteLocks;
 
 	/*
 	 * perXactPredicateListLock is only used in parallel queries: it protects
@@ -217,6 +221,8 @@ typedef struct RWConflictData *RWConflict;
 
 #define RWConflictDataSize \
 		((Size)MAXALIGN(sizeof(RWConflictData)))
+#define WWConflictDataSize \
+		((Size)MAXALIGN(sizeof(WWConflictData)))
 
 typedef struct RWConflictPoolHeaderData
 {
@@ -489,5 +495,69 @@ typedef struct TwoPhasePredicateRecord
 extern PredicateLockData *GetPredicateLockStatusData(void);
 extern int	GetSafeSnapshotBlockingPids(int blocked_pid,
 										int *output, int output_size);
+
+
+/* custom defination */
+typedef struct WWConflictData
+{
+	SHM_QUEUE	outLink;		/* link for list of conflicts out from a sxact */
+	SHM_QUEUE	inLink;			/* link for list of conflicts in to a sxact */
+	SERIALIZABLEXACT *sxactOut;
+	SERIALIZABLEXACT *sxactIn;
+} WWConflictData;
+
+typedef struct WWConflictData *WWConflict;
+
+typedef struct WWConflictPoolHeaderData
+{
+	SHM_QUEUE	availableList;
+	WWConflict	element;
+} WWConflictPoolHeaderData;
+
+typedef struct WWConflictPoolHeaderData *WWConflictPoolHeader;
+
+static WWConflictPoolHeader WWConflictPool;
+
+#define WWConflictPoolHeaderDataSize \
+		((Size)MAXALIGN(sizeof(WWConflictPoolHeaderData)))
+
+typedef PREDICATELOCKTARGETTAG PREDICATEWRITELOCKTARGETTAG;
+
+typedef struct PREDICATEWRITELOCKTARGET
+{
+	/* hash key */
+	PREDICATEWRITELOCKTARGETTAG tag; /* unique identifier of lockable object */
+
+	/* data */
+	SHM_QUEUE	predicateWriteLocks; /* list of PREDICATEWRITELOCK objects assoc. with
+								 * predicate write lock target */
+} PREDICATEWRITELOCKTARGET;
+
+typedef struct PREDICATEWRITELOCKTAG
+{
+	PREDICATEWRITELOCKTARGET *myTarget;
+	SERIALIZABLEXACT *myXact;
+} PREDICATEWRITELOCKTAG;
+
+typedef struct PREDICATEWRITELOCK
+{
+	/* hash key */
+	PREDICATEWRITELOCKTAG tag;		/* unique identifier of lock */
+
+	/* data */
+	SHM_QUEUE	targetLink;		/* list link in PREDICATELOCKTARGET's list of
+								 * predicate locks */
+	SHM_QUEUE	xactLink;		/* list link in SERIALIZABLEXACT's list of
+								 * predicate locks */
+} PREDICATEWRITELOCK;
+
+typedef struct LOCALPREDICATEWRITELOCK
+{
+	/* hash key */
+	PREDICATEWRITELOCKTARGETTAG tag; /* unique identifier of lockable object */
+
+	/* data */
+	bool		held;			/* is lock held	*/
+} LOCALPREDICATEWRITELOCK;
 
 #endif							/* PREDICATE_INTERNALS_H */

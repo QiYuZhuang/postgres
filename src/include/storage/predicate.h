@@ -84,4 +84,17 @@ extern void predicatelock_twophase_recover(TransactionId xid, uint16 info,
 extern SerializableXactHandle ShareSerializableXact(void);
 extern void AttachSerializableXact(SerializableXactHandle handle);
 
+/* custom defination */
+extern void InitPredicateWriteLocks(void);
+
+extern void PredicateWriteLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
+							 TransactionId insert_xid);
+
+extern void ReleasePredicateWriteLocks(bool isCommit);
+
+/* conflict detection (may also trigger rollback) 
+ * serializable isolation
+ */
+extern bool CheckForDeadLockConflictOutNeeded(Relation relation, Snapshot snapshot);
+
 #endif							/* PREDICATE_H */

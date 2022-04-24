@@ -150,3 +150,7 @@ int64		VacuumPageDirty = 0;
 
 int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
+
+/* my defined variables */
+bool        EnableDeadLockDection = true;
+bool        EnableSerializable = true;

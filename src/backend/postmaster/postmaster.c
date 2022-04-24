@@ -702,7 +702,7 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:x:y:X:Y:-:")) != -1)
 	{
 		switch (opt)
 		{
@@ -830,6 +830,22 @@ PostmasterMain(int argc, char *argv[])
 
 			case 'W':
 				SetConfigOption("post_auth_delay", optarg, PGC_POSTMASTER, PGC_S_ARGV);
+				break;
+			case 'x':
+				/* if true, open deadlock dection*/
+				EnableDeadLockDection = false;
+				break;
+			case 'y':
+				/* if true, use SSI algorithm, else SI */
+				EnableSerializable = false;
+				break;
+			case 'X':
+				/* if true, open deadlock dection*/
+				EnableDeadLockDection = true;
+				break;
+			case 'Y':
+				/* if true, use SSI algorithm, else SI */
+				EnableSerializable = true;
 				break;
 
 			case 'c':

@@ -40,6 +40,7 @@
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/predicate.h"
+#include "storage/predicate_write.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
@@ -232,6 +233,11 @@ CreateSharedMemoryAndSemaphores(void)
 	 * Set up predicate lock manager
 	 */
 	InitPredicateLocks();
+
+	/*
+	 * Set up predicate write lock manager
+	 */
+	InitPredicateWriteLocks();
 
 	/*
 	 * Set up process table

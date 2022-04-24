@@ -32,6 +32,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
+#include "miscadmin.h"
 
 
 /*
@@ -595,6 +596,10 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			if (owner == TopTransactionResourceOwner)
 			{
 				ProcReleaseLocks(isCommit);
+				if (EnableSerializable && !EnableDeadLockDection)
+				{
+					ReleasePredicateWriteLocks(isCommit);
+				}
 				ReleasePredicateLocks(isCommit, false);
 			}
 		}

@@ -1362,10 +1362,12 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 							 PG_WAIT_LOCK | locallock->tag.lock.locktag_type);
 			ResetLatch(MyLatch);
 			/* check for deadlocks first, as that's probably log-worthy */
-			if (got_deadlock_timeout)
-			{
-				CheckDeadLock();
-				got_deadlock_timeout = false;
+			if (EnableDeadLockDection || !EnableSerializable) {
+				if (got_deadlock_timeout)
+				{
+					CheckDeadLock();
+					got_deadlock_timeout = false;
+				}
 			}
 			CHECK_FOR_INTERRUPTS();
 		}
