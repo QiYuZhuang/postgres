@@ -158,6 +158,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"LockManager",
 	/* LWTRANCHE_PREDICATE_LOCK_MANAGER: */
 	"PredicateLockManager",
+	/* LWTRANCHE_PREDICATE_WRITE_LOCK_MANAGER: */
+	"PredicateWriteLockManager",
 	/* LWTRANCHE_PARALLEL_HASH_JOIN: */
 	"ParallelHashJoin",
 	/* LWTRANCHE_PARALLEL_QUERY_DSA: */
@@ -534,6 +536,10 @@ InitializeLWLocks(void)
 	lock = MainLWLockArray + PREDICATELOCK_MANAGER_LWLOCK_OFFSET;
 	for (id = 0; id < NUM_PREDICATELOCK_PARTITIONS; id++, lock++)
 		LWLockInitialize(&lock->lock, LWTRANCHE_PREDICATE_LOCK_MANAGER);
+
+	lock = MainLWLockArray + PREDICATEWRITELOCK_MANAGER_LWLOCK_OFFSET;
+	for (id = 0; id < NUM_PREDICATELOCK_PARTITIONS; id++, lock++)
+		LWLockInitialize(&lock->lock, LWTRANCHE_PREDICATE_WRITE_LOCK_MANAGER);
 
 	/*
 	 * Copy the info about any named tranches into shared memory (so that

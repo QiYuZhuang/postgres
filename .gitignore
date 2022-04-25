@@ -48,3 +48,4 @@ lib*.pc
 logfile
 *.gdb
 pgdata2/*
+bug*

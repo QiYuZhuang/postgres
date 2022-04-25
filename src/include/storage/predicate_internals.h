@@ -103,6 +103,8 @@ typedef struct SERIALIZABLEXACT
 	 */
 	LWLock		perXactPredicateListLock;
 
+	LWLock		perXactPredicateWriteListLock;
+
 	/*
 	 * for r/o transactions: list of concurrent r/w transactions that we could
 	 * potentially have conflicts with, and vice versa for r/w transactions
