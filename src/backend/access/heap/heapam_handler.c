@@ -307,6 +307,10 @@ heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 	 * the storage itself is cleaning the dead tuples by itself, it is the
 	 * time to call the index tuple deletion also.
 	 */
+	if (EnableSerializable && !EnableDeadLockDection)
+	{
+		PredicateWriteLockTID(relation, tid, snapshot, 0);
+	}
 	return heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
 }
 

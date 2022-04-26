@@ -499,22 +499,17 @@ static void ReleasePredicateLocksLocal(void);
  * The local hash table used to determine when to combine multiple fine-
  * grained locks into a single courser-grained lock.
  */
-static HTAB *LocalPredicateWriteLockHash = NULL;
 static HTAB *PredicateWriteLockTargetHash;
 static HTAB *PredicateWriteLockHash;
 
 static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targettag,
 								    uint32 targettaghash,
 								    SERIALIZABLEXACT *sxact);
-static bool PredicateWriteLockExists(const PREDICATEWRITELOCKTARGETTAG *targettag);
 static bool WWConflictExists(const SERIALIZABLEXACT *writeOut, const SERIALIZABLEXACT *writeIn);
-static void DeleteWriteLockTarget(PREDICATEWRITELOCKTARGET *target, uint32 targettaghash);
 static void PredicateWriteLockAcquire(const PREDICATEWRITELOCKTARGETTAG *targettag);
 static void FlagWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writerIn);
 static void SetWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writerIn);
 static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn);
-static void CreateLocalPredicateWriteLockHash(void);
-static void ReleasePredicateWriteLocksLocal(void);
 static void RemoveWriteTargetIfNoLongerUsed(PREDICATEWRITELOCKTARGET *target, uint32 targettaghash);
 static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *targettag);
 static void ReleaseWWConflict(WWConflict conflict);
@@ -1953,11 +1948,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	LWLockRelease(SerializableXactHashLock);
 
 	CreateLocalPredicateLockHash();
-	if (EnableSerializable && !EnableDeadLockDection)
-	{
-		CreateLocalPredicateWriteLockHash();
-	}
-	
+
 	return snapshot;
 }
 
@@ -5245,12 +5236,7 @@ AttachSerializableXact(SerializableXactHandle handle)
 	if (MySerializableXact != InvalidSerializableXact)
 	{
 		CreateLocalPredicateLockHash();
-		if (EnableSerializable && !EnableDeadLockDection)
-		{
-			CreateLocalPredicateWriteLockHash();
-		}
 	}
-		
 }
 
 /*------------------------------------------------------------------------*/
@@ -5265,9 +5251,9 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	LWLock	   *partitionLock;
 	bool		found;
 
-	elog(LOG, "CreatePredicateWriteLock begin");
+	// elog(LOG, "CreatePredicateWriteLock begin");
 	partitionLock = PredicateWriteLockHashPartitionLock(targettaghash);
-
+	
 	
 	if (IsInParallelMode())
 		LWLockAcquire(&sxact->perXactPredicateWriteListLock, LW_EXCLUSIVE);
@@ -5287,14 +5273,17 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	if (!found)
 		SHMQueueInit(&(target->predicateWriteLocks));
 
-	elog(LOG, "CreatePredicateWriteLock create predicate write locks is %x.", &(target->predicateWriteLocks));
+	// elog(LOG, "CreatePredicateWriteLock create predicate write locks is %x.", &(target->predicateWriteLocks));
 	/* 
 	 * already a predicate target is existed in PredicateWriteLockTargetHash
 	 * we need to set ww conflict edge
 	 */
 	LWLockRelease(partitionLock);
+	// TODO: change SerializableXactHashLock
+	// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
 	CheckForDeadLockConflictIn(targettag);
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 	/* We've got the sxact and target, make sure they're joined. */
 	locktag.myTarget = target;
@@ -5311,7 +5300,7 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 
 	if (!found)
 	{
-		elog(LOG, "CreatePredicateWriteLock, targetLink is %x, targetLink->next is %x, predicateLink is %x.",  &(lock->targetLink), &(lock->targetLink.next), &(target->predicateWriteLocks));
+		// elog(LOG, "CreatePredicateWriteLock, targetLink is %x, targetLink->next is %x, predicateLink is %x.",  &(lock->targetLink), &(lock->targetLink.next), &(target->predicateWriteLocks));
 		SHMQueueInsertBefore(&(target->predicateWriteLocks), &(lock->targetLink));
 		SHMQueueInsertBefore(&(sxact->predicateWriteLocks),
 							 &(lock->xactLink));
@@ -5320,35 +5309,18 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	LWLockRelease(partitionLock);
 	if (IsInParallelMode())
 		LWLockRelease(&sxact->perXactPredicateWriteListLock);
-	LWLockRelease(SerializableXactHashLock);
-	elog(LOG, "CreatePredicateWriteLock end");
-}
-
-static bool PredicateWriteLockExists(const PREDICATEWRITELOCKTARGETTAG *targettag)
-{
-	LOCALPREDICATEWRITELOCK *lock;
-
-	/* check local hash table */
-	lock = (LOCALPREDICATEWRITELOCK *) hash_search(LocalPredicateWriteLockHash,
-											  targettag,
-											  HASH_FIND, NULL);
-
-	if (!lock)
-		return false;
-
-	/*
-	 * Found entry in the table, but still need to check whether it's actually
-	 * held -- it could just be a parent of some held lock.
-	 */
-	return lock->held;
+	// TODO: change SerializableXactHashLock
+	LWLockRelease(SerializablePredicateWriteListLock);
+	// elog(LOG, "CreatePredicateWriteLock end");
 }
 
 static bool WWConflictExists(const SERIALIZABLEXACT *writeOut, const SERIALIZABLEXACT *writeIn)
 {
+	// WWConflictExists need share lock on SerializableXactHashLock
 	WWConflict	conflict;
 
 	Assert(writeOut != writeIn);
-	elog(LOG, "WWConflictExists begin, writeOut is %x, writeIn, %x.", writeOut, writeIn);
+	// elog(LOG, "WWConflictExists begin, writeOut is %x, writeIn, %x.", writeOut, writeIn);
 	/* Check the ends of the purported conflict first. */
 	if (SxactIsDoomed(writeOut)
 		|| SxactIsDoomed(writeIn)
@@ -5365,7 +5337,7 @@ static bool WWConflictExists(const SERIALIZABLEXACT *writeOut, const SERIALIZABL
 	{
 		if (conflict->sxactIn == writeIn)
 		{
-			elog(LOG, "WWConflictExists find conflicts, end.");
+			// elog(LOG, "WWConflictExists find conflicts, end.");
 			return true;
 		}
 		conflict = (WWConflict)
@@ -5375,55 +5347,37 @@ static bool WWConflictExists(const SERIALIZABLEXACT *writeOut, const SERIALIZABL
 	}
 
 	/* No conflict found. */
-	elog(LOG, "WWConflictExists find no conflicts, end.");
+	// elog(LOG, "WWConflictExists find no conflicts, end.");
 	return false;
 }
 
 static void PredicateWriteLockAcquire(const PREDICATEWRITELOCKTARGETTAG *targettag)
 {
 	uint32		targettaghash;
-	bool		found;
-	LOCALPREDICATEWRITELOCK *locallock;
-	elog(LOG, "PredicateWriteLockAcquire begin, targettag is %x.", targettag);
-	/* Do we have the lock already 
-	 * If we get a predicate wroite lock before, we can not conflict with ourself, just skip!
-	 */
-	if (PredicateWriteLockExists(targettag))
-	{
-		elog(LOG, "FlagWWConflict target is existed, end.");
-		return;
-	}
 
 	/* the same hash and LW lock apply to the lock target and the local lock. */
 	targettaghash = PredicateWriteLockTargetTagHashCode(targettag);
 
-	/* Acquire lock in local table */
-	locallock = (LOCALPREDICATEWRITELOCK *)
-		hash_search_with_hash_value(LocalPredicateWriteLockHash,
-									targettag, targettaghash,
-									HASH_ENTER, &found);
-	locallock->held = true;
-
 	/* Actually create the lock */
 	CreatePredicateWriteLock(targettag, targettaghash, MySerializableXact);
-	elog(LOG, "PredicateWriteLockAcquire end");
+	// elog(LOG, "PredicateWriteLockAcquire end");
 }
 
 static void FlagWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 {
     Assert(writeOut != writeIn);
-	elog(LOG, "FlagWWConflict begin, writeOut is %x, writeIn is %x.", writeOut, writeIn);
+	// elog(LOG, "FlagWWConflict begin, writeOut is %x, writeIn is %x.", writeOut, writeIn);
 	// /* First, see if this conflict causes failure. */
 	CheckForWWConflictFailure(writeOut, writeIn);
 
 	/* Actually do the conflict flagging. */
 	SetWWConflict(writeOut, writeIn);
-	elog(LOG, "FlagWWConflict end");
+	// elog(LOG, "FlagWWConflict end");
 }
 
 static void SetWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 {
-	elog(LOG, "SetWWConflict begin");
+	// elog(LOG, "SetWWConflict begin");
     WWConflict	conflict;
 
 	Assert(writeOut != writeIn);
@@ -5448,17 +5402,19 @@ static void SetWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 	conflict->sxactIn = writeIn;
 	SHMQueueInsertBefore(&writeOut->outWriteConflicts, &conflict->outLink);
 	SHMQueueInsertBefore(&writeIn->inWriteConflicts, &conflict->inLink);
-	elog(LOG, "SetWWConflict end");
+	// elog(LOG, "SetWWConflict end");
 }
 
 static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 {
-	elog(LOG, "CheckForWWConflictFailure begin");
+	// elog(LOG, "CheckForWWConflictFailure begin");
 	bool		failure;
 	int8_t 		condition;
 	WWConflict	conflict;
 
-	Assert(LWLockHeldByMe(SerializableXactHashLock));
+	// TODO: change SerializableXactHashLock
+	// Assert(LWLockHeldByMe(SerializableXactHashLock));
+	Assert(LWLockHeldByMe(SerializablePredicateWriteListLock));
 
 	failure = false;
 
@@ -5488,7 +5444,7 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 		{
 			SERIALIZABLEXACT *t2 = conflict->sxactIn;
 
-			if (!SxactIsPrepared(t2) && !SxactIsCommitted(t2) && !SxactIsDoomed(t2))
+			if (!SxactIsPrepared(t2) && !SxactIsDoomed(t2) && !SxactIsCommitted(t2))
 			{
 				failure = true;
 				condition = 1;
@@ -5512,7 +5468,7 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 		{
 			SERIALIZABLEXACT *t0 = conflict->sxactOut;
 
-			if (!SxactIsPrepared(t0) && !SxactIsCommitted(t0) && !SxactIsDoomed(t0))
+			if (!SxactIsPrepared(t0) && !SxactIsDoomed(t0) && !SxactIsCommitted(t0))
 			{
 				failure = true;
 				condition = 2;
@@ -5527,10 +5483,11 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 
 	/* rollback */
 	if (failure) {
-		elog(LOG, "CheckForWWConflictFailure find failure, end.");
-		LWLockRelease(SerializableXactHashLock);
+		// elog(LOG, "CheckForWWConflictFailure find failure, end.");
+		// TODO: change SerializableXactHashLock
 		if (condition == 1)
 		{
+			LWLockRelease(SerializablePredicateWriteListLock);
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
@@ -5540,6 +5497,9 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 		}
 		else if (condition == 2)
 		{
+			LWLockRelease(SerializablePredicateWriteListLock);
+			// writeIn->flags != SXACT_FLAG_DOOMED;
+			// return;
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
@@ -5548,35 +5508,7 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 		}
 		writeOut->flags |= SXACT_FLAG_DOOMED;
 	}
-	elog(LOG, "CheckForWWConflictFailure end");
-}
-
-static void CreateLocalPredicateWriteLockHash(void)
-{
-	HASHCTL		hash_ctl;
-
-	// elog(ERROR, "create local hash table.");
-	/* Initialize the backend-local hash table of parent locks */
-	Assert(LocalPredicateWriteLockHash == NULL);
-	hash_ctl.keysize = sizeof(PREDICATEWRITELOCKTARGETTAG);
-	hash_ctl.entrysize = sizeof(LOCALPREDICATEWRITELOCK);
-	LocalPredicateWriteLockHash = hash_create("Local predicate write lock",
-										 max_predicate_locks_per_xact,
-										 &hash_ctl,
-										 HASH_ELEM | HASH_BLOBS);
-}
-
-static void ReleasePredicateWriteLocksLocal(void)
-{
-	// MySerializableXact = InvalidSerializableXact;
-	// MyXactDidWrite = false;
-
-	/* Delete per-transaction lock table */
-	if (LocalPredicateWriteLockHash != NULL)
-	{
-		hash_destroy(LocalPredicateWriteLockHash);
-		LocalPredicateWriteLockHash = NULL;
-	}
+	// elog(LOG, "CheckForWWConflictFailure end");
 }
 
 static void RemoveWriteTargetIfNoLongerUsed(PREDICATEWRITELOCKTARGET *target, uint32 targettaghash)
@@ -5686,7 +5618,7 @@ void InitPredicateWriteLocks(void)
 	 * occasional transactions canceled when trying to flag conflicts. That's
 	 * probably OK.
 	 */
-	max_table_size *= 12;
+	max_table_size *= 8;
 
 	WWConflictPool = ShmemInitStruct("WWConflictPool",
 									 WWConflictPoolHeaderDataSize,
@@ -5712,7 +5644,7 @@ void InitPredicateWriteLocks(void)
 
 void PredicateWriteLockTID(Relation relation, ItemPointer tid, Snapshot snapshot, TransactionId insert_xid)
 {
-	elog(LOG, "PredicateWriteLockTID begin, transactionId is %d.", insert_xid);
+	// elog(LOG, "PredicateWriteLockTID begin, transactionId is %d.", insert_xid);
     PREDICATEWRITELOCKTARGETTAG tag;
 
 	if (MySerializableXact == InvalidSerializableXact || !IsMVCCSnapshot(snapshot))
@@ -5734,22 +5666,19 @@ void PredicateWriteLockTID(Relation relation, ItemPointer tid, Snapshot snapshot
 									 ItemPointerGetBlockNumber(tid),
 									 ItemPointerGetOffsetNumber(tid));
 	PredicateWriteLockAcquire(&tag);
-	elog(LOG, "PredicateWriteLockTID end");
+	// elog(LOG, "PredicateWriteLockTID end");
 }
 
 void ReleasePredicateWriteLocks(bool isCommit)
 {
-	elog(LOG, "ReleasePredicateWriteLocks begin");
+	// elog(LOG, "ReleasePredicateWriteLocks begin");
 	WWConflict	conflict,
 				nextConflict;
 	PREDICATEWRITELOCK *predlock;
 	SERIALIZABLEXACT *sxact = MySerializableXact;
-	SERIALIZABLEXACT *sxact_conflict;
 
 	if (MySerializableXact == InvalidSerializableXact)
 	{
-		Assert(LocalPredicateWriteLockHash == NULL);
-		// ReleasePredicateWriteLocksLocal();
 		return;
 	}
 
@@ -5769,9 +5698,10 @@ void ReleasePredicateWriteLocks(bool isCommit)
 	/* may not be serializable during COMMIT/ROLLBACK PREPARED */
 	Assert(MySerializableXact->pid == 0 || IsolationIsSerializable());
 	
-	LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+	// TODO: change SerializableXactHashLock
+	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
 	// delete predicate write locks
-	elog(LOG, "ReleasePredicateWriteLocks start  predicate write locks.");
+	// elog(LOG, "ReleasePredicateWriteLocks start  predicate write locks.");
 	predlock = (PREDICATEWRITELOCK *)
 		SHMQueueNext(&(sxact->predicateWriteLocks),
 					 &(sxact->predicateWriteLocks),
@@ -5800,13 +5730,11 @@ void ReleasePredicateWriteLocks(bool isCommit)
 		targettag = target->tag;
 		targettaghash = PredicateWriteLockTargetTagHashCode(&targettag);
 		partitionLock = PredicateWriteLockHashPartitionLock(targettaghash);
-		
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-		// LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
-		
-		elog(LOG, "delete target link %x.", targetLink);
+			
+		// elog(LOG, "delete target link %x.", targetLink);
 		SHMQueueDelete(targetLink);
 
+		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 		RemoveWriteTargetIfNoLongerUsed(target, targettaghash);
 
 		hash_search_with_hash_value(PredicateWriteLockHash, &tag,
@@ -5819,8 +5747,9 @@ void ReleasePredicateWriteLocks(bool isCommit)
 		predlock = nextpredlock;
 	}
 
-	elog(LOG, "ReleasePredicateWriteLocks start release ww conflicts.");
-
+	// elog(LOG, "ReleasePredicateWriteLocks start release ww conflicts.");
+	// LWLockRelease(SerializableXactHashLock);
+	// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 	conflict = (WWConflict)
 		SHMQueueNext(&MySerializableXact->outWriteConflicts,
 					 &MySerializableXact->outWriteConflicts,
@@ -5831,12 +5760,8 @@ void ReleasePredicateWriteLocks(bool isCommit)
 			SHMQueueNext(&MySerializableXact->outWriteConflicts,
 						 &conflict->outLink,
 						 offsetof(WWConflictData, outLink));
-		// if the in sxact is doom or commit, release the ww conflict
-		sxact_conflict = conflict->sxactIn;
-		if (SxactIsCommitted(sxact_conflict) || SxactIsDoomed(sxact_conflict))
-		{
-			ReleaseWWConflict(conflict);
-		}
+
+		ReleaseWWConflict(conflict);
 
 		conflict = nextConflict;
 	}
@@ -5855,20 +5780,14 @@ void ReleasePredicateWriteLocks(bool isCommit)
 			SHMQueueNext(&MySerializableXact->inWriteConflicts,
 						 &conflict->inLink,
 						 offsetof(WWConflictData, inLink));
-		// if the out sxact is doom or commit, release the ww conflict
-		sxact_conflict = conflict->sxactOut;
-		if (SxactIsCommitted(sxact_conflict) || SxactIsDoomed(sxact_conflict))
-		{
-			ReleaseWWConflict(conflict);
-		}
+
+		ReleaseWWConflict(conflict);
 
 		conflict = nextConflict;
 	}
 
-	LWLockRelease(SerializableXactHashLock);
-	elog(LOG, "ReleasePredicateWriteLocks start release local hash table.");
-	ReleasePredicateWriteLocksLocal();
-	elog(LOG, "ReleasePredicateWriteLocks end");
+	LWLockRelease(SerializablePredicateWriteListLock);
+	// elog(LOG, "ReleasePredicateWriteLocks end");
 }
 
 bool CheckForDeadLockConflictOutNeeded(Relation relation, Snapshot snapshot)
@@ -5890,9 +5809,8 @@ bool CheckForDeadLockConflictOutNeeded(Relation relation, Snapshot snapshot)
 
 static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *targettag)
 {
-	elog(LOG, "CheckForDeadLockConflictIn begin, targettag is %x", targettag);
+	// elog(LOG, "CheckForDeadLockConflictIn begin, targettag is %x", targettag);
 	uint32		targettaghash;
-	LWLock	   *partitionLock;
 	PREDICATEWRITELOCKTARGET *target;
 	PREDICATEWRITELOCK *predlock;
 
@@ -5902,8 +5820,7 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 	 * The same hash and LW lock apply to the lock target and the lock itself.
 	 */
 	targettaghash = PredicateWriteLockTargetTagHashCode(targettag);
-	partitionLock = PredicateLockHashPartitionLock(targettaghash);
-	LWLockAcquire(partitionLock, LW_SHARED);
+	// LWLockAcquire(partitionLock, LW_SHARED);
 	// LWLockAcquire(SerializablePredicateWriteListLock, LW_SHARED);
 	target = (PREDICATEWRITELOCKTARGET *)
 		hash_search_with_hash_value(PredicateWriteLockTargetHash,
@@ -5913,7 +5830,7 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 	if (!target)
 	{
 		/* Nothing has this target locked; we're done here. */
-		LWLockRelease(partitionLock);
+		// LWLockRelease(partitionLock);
 		return;
 	}
 
@@ -5921,8 +5838,8 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 	 * Each lock for an overlapping transaction represents a conflict: a
 	 * ww-dependency in to this transaction.
 	 */
-	elog(LOG, "CheckForDeadLockConflictIn check for ww conflict, target is %x", target);
-	LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+	// elog(LOG, "CheckForDeadLockConflictIn check for ww conflict, target is %x", target);
+	// LWLockAcquire(SerializableXactHashLock, LW_SHARED);
 	predlock = (PREDICATEWRITELOCK *)
 		SHMQueueNext(&(target->predicateWriteLocks),
 					 &(target->predicateWriteLocks),
@@ -5935,7 +5852,7 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 		SERIALIZABLEXACT *sxact;
 
 		predlocktargetlink = &(predlock->targetLink);
-		elog(LOG, "target->predicateWriteLocks is %x, predlocktargetlink is %x.", &(target->predicateWriteLocks),predlocktargetlink);
+		// elog(LOG, "target->predicateWriteLocks is %x, predlocktargetlink is %x.", &(target->predicateWriteLocks),predlocktargetlink);
 		nextpredlock = (PREDICATEWRITELOCK *)
 			SHMQueueNext(&(target->predicateWriteLocks),
 						 predlocktargetlink,
@@ -5958,8 +5875,8 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 				 && !SxactIsRolledBack(sxact)
 				 && !WWConflictExists(MySerializableXact, sxact))
 		{
-			LWLockRelease(SerializableXactHashLock);
-			LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			// LWLockRelease(SerializableXactHashLock);
+			// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
 
 			/*
 			 * Re-check after getting exclusive lock because the other
@@ -5973,21 +5890,21 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 				FlagWWConflict(MySerializableXact, sxact);
 			}
 
-			LWLockRelease(SerializableXactHashLock);
-			LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+			// LWLockRelease(SerializableXactHashLock);
+			// LWLockAcquire(SerializableXactHashLock, LW_SHARED);
 		}
-		elog(LOG, "CheckForDeadLockConflictIn flag ww conflict, predlock is %x, nextpredlock is %x.", predlock, nextpredlock);
+		// elog(LOG, "CheckForDeadLockConflictIn flag ww conflict, predlock is %x, nextpredlock is %x.", predlock, nextpredlock);
 		predlock = nextpredlock;
 	}
-	LWLockRelease(partitionLock);
-	LWLockRelease(SerializableXactHashLock);
-	elog(LOG, "CheckForDeadLockConflictIn end, targettag is %x", targettag);
+	// LWLockRelease(partitionLock);
+	// LWLockRelease(SerializableXactHashLock);
+	// elog(LOG, "CheckForDeadLockConflictIn end, targettag is %x", targettag);
 }
 
 static void
 ReleaseWWConflict(WWConflict conflict)
 {
-	elog(LOG, "ReleaseWWConflict run here.");
+	// elog(LOG, "ReleaseWWConflict run here.");
 	SHMQueueDelete(&conflict->inLink);
 	SHMQueueDelete(&conflict->outLink);
 	SHMQueueInsertBefore(&WWConflictPool->availableList, &conflict->outLink);
