@@ -97,4 +97,6 @@ extern void ReleasePredicateWriteLocks(bool isCommit);
  */
 extern bool CheckForDeadLockConflictOutNeeded(Relation relation, Snapshot snapshot);
 
+extern void CheckConflictStatus();
+
 #endif							/* PREDICATE_H */

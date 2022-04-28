@@ -5278,13 +5278,11 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	 * already a predicate target is existed in PredicateWriteLockTargetHash
 	 * we need to set ww conflict edge
 	 */
-	LWLockRelease(partitionLock);
+	// LWLockRelease(partitionLock);
 	// TODO: change SerializableXactHashLock
 	// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
-	CheckForDeadLockConflictIn(targettag);
 	
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+	// LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 	/* We've got the sxact and target, make sure they're joined. */
 	locktag.myTarget = target;
 	locktag.myXact = sxact;
@@ -5292,6 +5290,7 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 		hash_search_with_hash_value(PredicateWriteLockHash, &locktag,
 									PredicateLockHashCodeFromTargetHashCode(&locktag, targettaghash),
 									HASH_ENTER_NULL, &found);
+	
 	if (!lock)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -5310,6 +5309,8 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	if (IsInParallelMode())
 		LWLockRelease(&sxact->perXactPredicateWriteListLock);
 	// TODO: change SerializableXactHashLock
+	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
+	CheckForDeadLockConflictIn(targettag);
 	LWLockRelease(SerializablePredicateWriteListLock);
 	// elog(LOG, "CreatePredicateWriteLock end");
 }
@@ -5419,7 +5420,7 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 	failure = false;
 
 	/* check for probably deadlock
-	 * 			wo -> wi -> T2 --- (1)
+	 * 			wo -> wi -> T2 --- (1) // not rollback now
 	 *				or
 	 *			T0 -> wo -> wi --- (2)
 	 * notice: all transactions are concurrent, none of them is committed, wo is the invoking transaction
@@ -5483,16 +5484,17 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 
 	/* rollback */
 	if (failure) {
-		// elog(LOG, "CheckForWWConflictFailure find failure, end.");
+		elog(LOG, "CheckForWWConflictFailure find failure, end.");
 		// TODO: change SerializableXactHashLock
 		if (condition == 1)
 		{
-			LWLockRelease(SerializablePredicateWriteListLock);
-			ereport(ERROR,
-					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-					 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
-					 errdetail_internal("Reason code: Canceled on identification as a pivot, during write."),
-					 errhint("The transaction might succeed if retried.")));
+			return;
+			// LWLockRelease(SerializablePredicateWriteListLock);
+			// ereport(ERROR,
+			// 		(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+			// 		 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
+			// 		 errdetail_internal("Reason code: Canceled on identification as a pivot, during write."),
+			// 		 errhint("The transaction might succeed if retried.")));
 			// writeOut->flags |= SXACT_FLAG_DOOMED;
 		}
 		else if (condition == 2)
@@ -5807,20 +5809,88 @@ bool CheckForDeadLockConflictOutNeeded(Relation relation, Snapshot snapshot)
 	return true;
 }
 
+void CheckConflictStatus()
+{
+	WWConflict	conflict;
+	SERIALIZABLEXACT *sxact = MySerializableXact;
+	int flag = 0;
+
+	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
+	conflict = (WWConflict)
+	SHMQueueNext(&sxact->inWriteConflicts,
+					&sxact->inWriteConflicts,
+					offsetof(WWConflictData, inLink));
+	while (conflict)
+	{
+		SERIALIZABLEXACT *t0 = conflict->sxactOut;
+
+		if (!SxactIsPrepared(t0) && !SxactIsDoomed(t0) && !SxactIsCommitted(t0))
+		{
+			flag |= 1;
+			break;
+		}
+		conflict = (WWConflict)
+			SHMQueueNext(&sxact->inWriteConflicts,
+							&conflict->inLink,
+							offsetof(WWConflictData, inLink));
+	}
+
+	if (!flag)
+	{
+		LWLockRelease(SerializablePredicateWriteListLock);
+		return;
+	}	
+	
+	conflict = (WWConflict)
+	SHMQueueNext(&sxact->outWriteConflicts,
+					&sxact->outWriteConflicts,
+					offsetof(WWConflictData, outLink));
+	while (conflict)
+	{
+		SERIALIZABLEXACT *t0 = conflict->sxactIn;
+
+		if (!SxactIsPrepared(t0) && !SxactIsDoomed(t0) && !SxactIsCommitted(t0))
+		{
+			flag |= (1 << 1);
+			break;
+		}
+		conflict = (WWConflict)
+			SHMQueueNext(&sxact->outWriteConflicts,
+							&conflict->outLink,
+							offsetof(WWConflictData, outLink));
+	}
+
+	if (flag == 3)
+	{
+		LWLockRelease(SerializablePredicateWriteListLock);
+		ereport(ERROR,
+				(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+					errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
+					errdetail_internal("Reason code: Canceled on identification as a pivot, during write."),
+					errhint("The transaction might succeed if retried.")));
+	}
+	else
+	{
+		LWLockRelease(SerializablePredicateWriteListLock);
+		return;
+	}
+}
+
 static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *targettag)
 {
 	// elog(LOG, "CheckForDeadLockConflictIn begin, targettag is %x", targettag);
 	uint32		targettaghash;
 	PREDICATEWRITELOCKTARGET *target;
 	PREDICATEWRITELOCK *predlock;
-
+	LWLock 		*partitionLock;
 	Assert(MySerializableXact != InvalidSerializableXact);
 
 	/*
 	 * The same hash and LW lock apply to the lock target and the lock itself.
 	 */
 	targettaghash = PredicateWriteLockTargetTagHashCode(targettag);
-	// LWLockAcquire(partitionLock, LW_SHARED);
+	partitionLock = PredicateWriteLockHashPartitionLock(targettaghash);
+	LWLockAcquire(partitionLock, LW_SHARED);
 	// LWLockAcquire(SerializablePredicateWriteListLock, LW_SHARED);
 	target = (PREDICATEWRITELOCKTARGET *)
 		hash_search_with_hash_value(PredicateWriteLockTargetHash,
@@ -5830,7 +5900,8 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 	if (!target)
 	{
 		/* Nothing has this target locked; we're done here. */
-		// LWLockRelease(partitionLock);
+		LWLockRelease(partitionLock);
+		// LWLockRelease(SerializablePredicateWriteListLock);
 		return;
 	}
 
@@ -5875,8 +5946,8 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 				 && !SxactIsRolledBack(sxact)
 				 && !WWConflictExists(MySerializableXact, sxact))
 		{
-			// LWLockRelease(SerializableXactHashLock);
-			// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
+			// LWLockRelease(SerializablePredicateWriteListLock);
+			// LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
 
 			/*
 			 * Re-check after getting exclusive lock because the other
@@ -5890,14 +5961,14 @@ static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *target
 				FlagWWConflict(MySerializableXact, sxact);
 			}
 
-			// LWLockRelease(SerializableXactHashLock);
-			// LWLockAcquire(SerializableXactHashLock, LW_SHARED);
+			// LWLockRelease(SerializablePredicateWriteListLock);
+			// LWLockAcquire(SerializablePredicateWriteListLock, LW_SHARED);
 		}
 		// elog(LOG, "CheckForDeadLockConflictIn flag ww conflict, predlock is %x, nextpredlock is %x.", predlock, nextpredlock);
 		predlock = nextpredlock;
 	}
-	// LWLockRelease(partitionLock);
-	// LWLockRelease(SerializableXactHashLock);
+	LWLockRelease(partitionLock);
+	// LWLockRelease(SerializablePredicateWriteListLock);
 	// elog(LOG, "CheckForDeadLockConflictIn end, targettag is %x", targettag);
 }
 

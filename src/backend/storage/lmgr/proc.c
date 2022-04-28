@@ -53,6 +53,7 @@
 #include "storage/procsignal.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
+#include "storage/predicate.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -1084,6 +1085,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	PGPROC	   *leader = MyProc->lockGroupLeader;
 	int			i;
 
+	// stats the count of wait
 	/*
 	 * If group locking is in use, locks held by members of my locking group
 	 * need to be included in myHeldLocks.  This is not required for relation
@@ -1362,13 +1364,20 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 							 PG_WAIT_LOCK | locallock->tag.lock.locktag_type);
 			ResetLatch(MyLatch);
 			/* check for deadlocks first, as that's probably log-worthy */
-			if (EnableDeadLockDection || !EnableSerializable) {
+			
 				if (got_deadlock_timeout)
 				{
-					CheckDeadLock();
+					if (EnableDeadLockDection || !EnableSerializable || !IsolationIsSerializable())
+					{
+						CheckDeadLock();
+					} 
+					else 
+					{
+						CheckConflictStatus();
+					}
 					got_deadlock_timeout = false;
 				}
-			}
+			
 			CHECK_FOR_INTERRUPTS();
 		}
 
