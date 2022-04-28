@@ -237,10 +237,8 @@ CreateSharedMemoryAndSemaphores(void)
 	/*
 	 * Set up predicate write lock manager
 	 */
-	if (EnableSerializable && !EnableDeadLockDection && IsolationIsSerializable())
-	{
-		InitPredicateWriteLocks();
-	}
+
+	InitPredicateWriteLocks();
 
 	/*
 	 * Set up process table

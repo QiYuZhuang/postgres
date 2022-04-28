@@ -5278,11 +5278,12 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	 * already a predicate target is existed in PredicateWriteLockTargetHash
 	 * we need to set ww conflict edge
 	 */
-	// LWLockRelease(partitionLock);
+	LWLockRelease(partitionLock);
 	// TODO: change SerializableXactHashLock
 	// LWLockAcquire(SerializableXactHashLock, LW_EXCLUSIVE);
-	
-	// LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
+	CheckForDeadLockConflictIn(targettag);
+	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 	/* We've got the sxact and target, make sure they're joined. */
 	locktag.myTarget = target;
 	locktag.myXact = sxact;
@@ -5309,8 +5310,7 @@ static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targetta
 	if (IsInParallelMode())
 		LWLockRelease(&sxact->perXactPredicateWriteListLock);
 	// TODO: change SerializableXactHashLock
-	LWLockAcquire(SerializablePredicateWriteListLock, LW_EXCLUSIVE);
-	CheckForDeadLockConflictIn(targettag);
+	
 	LWLockRelease(SerializablePredicateWriteListLock);
 	// elog(LOG, "CreatePredicateWriteLock end");
 }
@@ -5484,7 +5484,7 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 
 	/* rollback */
 	if (failure) {
-		elog(LOG, "CheckForWWConflictFailure find failure, end.");
+		// elog(LOG, "CheckForWWConflictFailure find failure, end.");
 		// TODO: change SerializableXactHashLock
 		if (condition == 1)
 		{
