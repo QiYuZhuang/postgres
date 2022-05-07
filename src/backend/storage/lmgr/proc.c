@@ -1365,18 +1365,21 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 			ResetLatch(MyLatch);
 			/* check for deadlocks first, as that's probably log-worthy */
 			
-				if (got_deadlock_timeout)
+			if (got_deadlock_timeout)
+			{
+				if (EnableDeadLockDection || !EnableSerializable || !IsolationIsSerializable())
 				{
-					if (EnableDeadLockDection || !EnableSerializable || !IsolationIsSerializable())
-					{
-						CheckDeadLock();
-					} 
-					else 
-					{
-						CheckConflictStatus();
-					}
-					got_deadlock_timeout = false;
+					CheckDeadLock();
+				} 
+				else 
+				{
+					// CheckDeadLock();
+					// CheckConflictStatus();
+					// deadlock_state = DS_NO_DEADLOCK;
+					// elog(LOG, "status: %d", MyProc->waitStatus);
 				}
+				got_deadlock_timeout = false;
+			}
 			
 			CHECK_FOR_INTERRUPTS();
 		}

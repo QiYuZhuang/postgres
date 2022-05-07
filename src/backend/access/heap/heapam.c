@@ -3340,6 +3340,11 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 l2:
 	checked_lockers = false;
 	locker_remains = false;
+
+	if (EnableSerializable && !EnableDeadLockDection && IsolationIsSerializable())
+	{
+		PredicateWriteLockTID(relation, otid, NULL, HeapTupleHeaderGetXmin(oldtup.t_data));
+	}
 	result = HeapTupleSatisfiesUpdate(&oldtup, cid, buffer);
 
 	/* see below about the "no wait" case */

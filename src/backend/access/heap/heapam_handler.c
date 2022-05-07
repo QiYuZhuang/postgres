@@ -329,10 +329,7 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	slot->tts_tableOid = RelationGetRelid(relation);
 	tuple->t_tableOid = slot->tts_tableOid;
 
-	if (EnableSerializable && !EnableDeadLockDection && IsolationIsSerializable())
-	{
-		PredicateWriteLockTID(relation, otid, snapshot, HeapTupleHeaderGetXmin(tuple->t_data));
-	}
+
 	result = heap_update(relation, otid, tuple, cid, crosscheck, wait,
 						 tmfd, lockmode);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);

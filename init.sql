@@ -3,4 +3,8 @@ DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(k INT PRIMARY KEY, v INT);
 INSERT INTO t1 VALUES (0, 0);
 INSERT INTO t1 VALUES (1, 0);                                                                                                                                                        
+DROP TABLE IF EXISTS t2;
+CREATE TABLE t2(k INT PRIMARY KEY, v INT);
+INSERT INTO t2 VALUES (0, 0);
+INSERT INTO t2 VALUES (1, 0);                                                                                                                                                        
 COMMIT;
