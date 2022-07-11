@@ -702,7 +702,7 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:x:y:X:Y:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:xyXYu-:")) != -1)
 	{
 		switch (opt)
 		{
@@ -847,7 +847,9 @@ PostmasterMain(int argc, char *argv[])
 				/* if true, use SSI algorithm, else SI */
 				EnableSerializable = true;
 				break;
-
+			case 'u':
+				Statistics = true;
+				break;
 			case 'c':
 			case '-':
 				{

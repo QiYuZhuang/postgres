@@ -1839,7 +1839,7 @@ lreplace:;
 					if (IsolationUsesXactSnapshot())
 						ereport(ERROR,
 								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-								 errmsg("could not serialize access due to concurrent update")));
+								 errmsg("could not serialize access due to concurrent update. The tuple has been updated.")));
 
 					/*
 					 * Already know that we're going to need to do EPQ, so

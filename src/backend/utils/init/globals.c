@@ -154,3 +154,4 @@ bool		VacuumCostActive = false;
 /* my defined variables */
 bool        EnableDeadLockDection = true;
 bool        EnableSerializable = true;
+bool        Statistics = false;

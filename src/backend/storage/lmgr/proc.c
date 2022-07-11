@@ -1367,14 +1367,14 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 			
 			if (got_deadlock_timeout)
 			{
-				if (EnableDeadLockDection || !EnableSerializable || !IsolationIsSerializable())
+				if (Statistics || EnableDeadLockDection || !EnableSerializable || !IsolationIsSerializable())
 				{
 					CheckDeadLock();
 				} 
 				else 
 				{
 					// CheckDeadLock();
-					// CheckConflictStatus();
+					CheckConflictStatus();
 					// deadlock_state = DS_NO_DEADLOCK;
 					// elog(LOG, "status: %d", MyProc->waitStatus);
 				}

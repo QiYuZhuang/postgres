@@ -501,6 +501,7 @@ static void ReleasePredicateLocksLocal(void);
  */
 static HTAB *PredicateWriteLockTargetHash;
 static HTAB *PredicateWriteLockHash;
+static uint32 wwconflict_num;
 
 static void CreatePredicateWriteLock(const PREDICATEWRITELOCKTARGETTAG *targettag,
 								    uint32 targettaghash,
@@ -513,6 +514,9 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 static void RemoveWriteTargetIfNoLongerUsed(PREDICATEWRITELOCKTARGET *target, uint32 targettaghash);
 static void CheckForDeadLockConflictIn(const PREDICATEWRITELOCKTARGETTAG *targettag);
 static void ReleaseWWConflict(WWConflict conflict);
+static uint32 StatisticsWWConflicts(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn);
+static uint32 StatisticsWWConflictsFront(SERIALIZABLEXACT *sxact);
+static uint32 StatisticsWWConflictsBack(SERIALIZABLEXACT *sxact);
 
 /*------------------------------------------------------------------------*/
 
@@ -5367,13 +5371,108 @@ static void PredicateWriteLockAcquire(const PREDICATEWRITELOCKTARGETTAG *targett
 	// elog(LOG, "PredicateWriteLockAcquire end");
 }
 
+static uint32 StatisticsWWConflicts(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
+{
+	uint32 count_front = 0;
+	uint32 count_back = 0;
+
+	{
+		WWConflict conflict = (WWConflict)
+		SHMQueueNext(&writeIn->outWriteConflicts,
+						&writeIn->outWriteConflicts,
+						offsetof(WWConflictData, outLink));
+		while (conflict)
+		{
+			SERIALIZABLEXACT *t2 = conflict->sxactIn;
+
+			count_front++;
+			count_front += StatisticsWWConflictsFront(t2);
+			conflict = (WWConflict)
+				SHMQueueNext(&writeIn->outWriteConflicts,
+								&conflict->outLink,
+								offsetof(WWConflictData, outLink));
+		}
+	}
+	
+	{
+		WWConflict conflict = (WWConflict)
+		SHMQueueNext(&writeOut->inWriteConflicts,
+						&writeOut->inWriteConflicts,
+						offsetof(WWConflictData, inLink));
+		while (conflict)
+		{
+			SERIALIZABLEXACT *t2 = conflict->sxactIn;
+
+			count_front++;
+			count_front += StatisticsWWConflictsBack(t2);
+			conflict = (WWConflict)
+				SHMQueueNext(&writeOut->inWriteConflicts,
+								&conflict->inLink,
+								offsetof(WWConflictData, outLink));
+		}
+	}
+
+	return count_front + count_back + 1;
+}
+
+static uint32 StatisticsWWConflictsFront(SERIALIZABLEXACT *sxact)
+{
+	uint32 result = 0;
+	WWConflict conflict = (WWConflict)
+	SHMQueueNext(&sxact->outWriteConflicts,
+					&sxact->outWriteConflicts,
+					offsetof(WWConflictData, outLink));
+	while (conflict)
+	{
+		SERIALIZABLEXACT *t2 = conflict->sxactIn;
+
+		result++;
+		result += StatisticsWWConflictsFront(t2);
+		conflict = (WWConflict)
+			SHMQueueNext(&sxact->outWriteConflicts,
+							&conflict->outLink,
+							offsetof(WWConflictData, outLink));
+	}
+	return result;
+}
+
+static uint32 StatisticsWWConflictsBack(SERIALIZABLEXACT *sxact)
+{
+	uint32 result = 0;
+	WWConflict conflict = (WWConflict)
+	SHMQueueNext(&sxact->inWriteConflicts,
+					&sxact->inWriteConflicts,
+					offsetof(WWConflictData, inLink));
+	while (conflict)
+	{
+		SERIALIZABLEXACT *t2 = conflict->sxactOut;
+
+		result++;
+		result += StatisticsWWConflictsBack(t2);
+		conflict = (WWConflict)
+			SHMQueueNext(&sxact->inWriteConflicts,
+							&conflict->inLink,
+							offsetof(WWConflictData, inLink));
+	}
+	return result;
+}
+
 static void FlagWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 {
     Assert(writeOut != writeIn);
 	// elog(LOG, "FlagWWConflict begin, writeOut is %x, writeIn is %x.", writeOut, writeIn);
 	// /* First, see if this conflict causes failure. */
-	CheckForWWConflictFailure(writeOut, writeIn);
-
+	// if (!Statistics)
+	// {
+		CheckForWWConflictFailure(writeOut, writeIn);
+	// }
+	// else 
+	// {
+	// 	uint32_t count = 0;
+	// 	count = StatisticsWWConflicts(writeOut, writeIn);
+	// 	elog(LOG, "Number of continuous WW Conflict in the Dependency Serializable Graph is %d", count);
+	// }
+		
 	/* Actually do the conflict flagging. */
 	SetWWConflict(writeOut, writeIn);
 	// elog(LOG, "FlagWWConflict end");
@@ -5406,6 +5505,7 @@ static void SetWWConflict(SERIALIZABLEXACT *writeOut, SERIALIZABLEXACT *writeIn)
 	conflict->sxactIn = writeIn;
 	SHMQueueInsertBefore(&writeOut->outWriteConflicts, &conflict->outLink);
 	SHMQueueInsertBefore(&writeIn->inWriteConflicts, &conflict->inLink);
+	elog(LOG, "Number of continuous WW Conflict in the Dependency Serializable Graph is %d", ++WWConflictPool->count);
 	// elog(LOG, "SetWWConflict end");
 }
 
@@ -5491,14 +5591,14 @@ static void CheckForWWConflictFailure(SERIALIZABLEXACT *writeOut, SERIALIZABLEXA
 		// TODO: change SerializableXactHashLock
 		if (condition == 1)
 		{
-			// return;
+			return;
 			// LWLockRelease(SerializablePredicateWriteListLock);
-			LWLockRelease(SerializableXactHashLock);
-			ereport(ERROR,
-					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-					 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
-					 errdetail_internal("Reason code: Canceled on identification as a pivot, during write."),
-					 errhint("The transaction might succeed if retried.")));
+			// LWLockRelease(SerializableXactHashLock);
+			// ereport(ERROR,
+			// 		(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+			// 		 errmsg("could not serialize access due to write/write dependencies among transactions, avoid deadlock."),
+			// 		 errdetail_internal("Reason code: Canceled on identification as a pivot, during write."),
+			// 		 errhint("The transaction might succeed if retried.")));
 			// writeOut->flags |= SXACT_FLAG_DOOMED;
 		}
 		else if (condition == 2)
@@ -5995,4 +6095,5 @@ ReleaseWWConflict(WWConflict conflict)
 	SHMQueueDelete(&conflict->inLink);
 	SHMQueueDelete(&conflict->outLink);
 	SHMQueueInsertBefore(&WWConflictPool->availableList, &conflict->outLink);
+	WWConflictPool->count--;
 }

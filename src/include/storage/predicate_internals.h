@@ -514,6 +514,7 @@ typedef struct WWConflictPoolHeaderData
 {
 	SHM_QUEUE	availableList;
 	WWConflict	element;
+	uint32	count;
 } WWConflictPoolHeaderData;
 
 typedef struct WWConflictPoolHeaderData *WWConflictPoolHeader;

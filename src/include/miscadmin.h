@@ -277,6 +277,7 @@ extern bool VacuumCostActive;
 
 extern bool EnableDeadLockDection;
 extern bool EnableSerializable;
+extern bool Statistics;
 
 /* in tcop/postgres.c */
 
